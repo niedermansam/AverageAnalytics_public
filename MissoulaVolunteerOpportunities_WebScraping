@@ -1,0 +1,135 @@
+library(rvest)
+library(tidyverse)
+library(ggmap)
+library(leaflet)
+setwd("G:\\AverageAnalytics\\MissoulaNonProfit_Organizations")
+base_url <- "http://www.volunteermissoula.org/agency"
+
+base_url[2:11] <- paste0(base_url,"/index/",seq(12,120,12))
+base_url
+
+# GET LINKS FOR FIRST PAGE AND CREATE OBJECT CALLED urls
+urls <- read_html(base_url[1]) %>% html_nodes(".more-info") %>% 
+  html_attr("href") %>% as.tibble()
+
+# GET ALL LINK ON volunteermissoula.org's DIRECTORY
+for(i in 2:length(base_url)){
+  print(i)
+  foo <- read_html(base_url[i]) %>% html_nodes(".more-info") %>% html_attr("href") %>% as.tibble()
+  urls <- urls %>% bind_rows(foo)
+}
+
+# SCRAPE ALL PAGES IN THE DIRECTORY (THIS ONE TAKES A WHILE)
+foo<-NA
+for(i in 1:nrow(urls)){
+  print(i)
+  foo[i] <- read_html(urls[i,1][[1]]) %>% 
+    html_nodes(".description .section-inner , .col-sm-7 , .links .section-inner , .extra .section-inner , .location .section-inner , .contact .section-inner") %>% 
+    html_text() %>% str_flatten(collapse = " !!! ")
+}
+
+# DELETE UNNECESSARY WHITE SPACE
+volunteerMsla <- foo %>% str_squish()
+
+
+# SCRAPE URLS FROM ALL PAGES IN DIRECTORY
+page <- NA
+for(i in 1:nrow(urls)){
+  print(i)
+  page <-read_html(urls[i,1][[1]]) %>% 
+    html_nodes(".links a") %>% 
+    html_attr("href")
+  
+  urls[i] <- ifelse(length(page) == 0, NA,
+    page)
+}
+
+volunteerMsla$website <- NULL
+
+foo <- tibble(n = 1:length(volunteerMsla))
+foo$info <- NA
+for(i in 1:length(volunteerMsla)){
+  foo$info[i] <- volunteerMsla[[i]]
+}
+
+volunteerMsla <- foo
+volunteerMsla$name  <- NA
+volunteerMsla$website <- urls
+info <- volunteerMsla$info %>% str_split(" !!! ")
+length(info)
+info[[6]][2]
+
+# EXTRACT NAME OF ORGANIZATION
+for(i in 1:nrow(volunteerMsla)){
+  print(info[[i]][1])
+  volunteerMsla$name[i] <- info[[i]][1]
+}
+
+# EXTRACT "WHO WE ARE" STATEMENT
+volunteerMsla$Who_We_Are <- NA
+for(i in 1:nrow(volunteerMsla)){
+  bar <- ifelse(str_detect(info[[i]][2],"Who We Are"),info[[i]][2],"No Info")
+  print(bar)
+  volunteerMsla$Who_We_Are[i] <- bar
+}
+
+# EXTRACT ADDRESS INFORMATION
+volunteerMsla$address <- volunteerMsla$info %>% str_extract("Location.*") %>% str_remove_all(" !!! .*$") %>% 
+  str_remove_all("Location Get Connected Icon ") %>% str_remove_all(" Get Connected.*")
+
+# EXTRACT OFFICE HOURS INFORMATION
+volunteerMsla$hours <- ifelse(volunteerMsla$info %>% str_extract("Office Hours.*") %>% str_remove_all("Office Hours Get Connected Icon ") %>% is.na(),
+                              "No Info",volunteerMsla$info %>% str_extract("Office Hours.*") %>% str_remove_all("Office Hours Get Connected Icon "))
+
+# GEOCODE ADDRESS COLUMN
+volunteerMsla$lat <- NA
+volunteerMsla$lon <- NA
+
+for(i in 317:length(volunteerMsla$address)){
+  print(paste(i, "of", nrow(volunteerMsla)))
+  if(is.na(volunteerMsla$lat[i])){
+    result <- geocode(volunteerMsla$address[i], output = "latlon", source = "google")
+    volunteerMsla$lon[i] <- as.numeric(result[1])
+    volunteerMsla$lat[i] <- as.numeric(result[2])
+    Sys.sleep(.5)
+  }
+}
+
+#EXTRACT PHONE NUMBERS
+phones <- volunteerMsla$info %>% str_extract("Contact Get Connected Icon.*") %>%
+  str_remove_all("Contact Get Connected Icon") %>% 
+  str_remove_all("Get Connected Icon.*")
+phones <- ifelse(is.na(phones)|phones %>% str_detect("@"),"No Info",phones)
+volunteerMsla$phone <- phones
+rm(phones)
+
+#EXTRACT EMAILS 
+emails <- volunteerMsla$info %>% str_extract("Contact Get Connected Icon.*") %>%
+  str_remove_all("Contact Get Connected Icon") %>% str_extract("Get Connected Icon.*") 
+mess <- volunteerMsla$info %>% str_split(" ") #%>% str_detect("@")
+
+volunteerMsla$email <- NA
+volunteerMsla$email
+
+for(i in 1:nrow(volunteerMsla)){
+  print(i)
+  email <- mess[[i]] %>% str_subset("@")
+  volunteerMsla$email[i] <- email[1]
+}
+
+volunteerMsla$email <- ifelse(is.na(volunteerMsla$email),"No Info",volunteerMsla$email)
+names(volunteerMsla)
+
+volunteerMsla$source_url <- urls
+names(urls)[1] <- "source_url"
+volunteerMsla <- bind_cols(volunteerMsla,urls)
+volunteerMsla
+# MAKE OBJECT THAT ONLY CONTAINS ONE ROW FOR EACH ORGANIZATION
+volunteerMsla_unique <- subset(volunteerMsla,!duplicated(volunteerMsla$name))
+
+volunteerMsla_unique
+
+write.csv(volunteerMsla_unique,"VolunteerMissoula_UniqueListings.csv")
+write.csv(volunteerMsla,"VolunteerMissoula_AllListings.csv")
+
+
